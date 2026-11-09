@@ -1,7 +1,8 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>AUTOPLAY, the controller that plays itself</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="A one take 3D film about a game controller nobody is holding. Concept render, no trading logic.">
+<meta name="description" content="A 3D controller nobody is holding, and a paper SOL simulator where you deploy your own agent. No wallet, no real funds.">
+<link rel="stylesheet" href="web/app.css">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=block" rel="stylesheet">
 <style>
 html,body{margin:0;background:#e9e2f3;overflow:hidden}
@@ -315,8 +316,8 @@ function camAt(t) {
   cam.position.set(tg.x + Math.sin(az) * Math.cos(el) * d, tg.y + Math.sin(el) * d, tg.z + Math.cos(az) * Math.cos(el) * d);
   cam.lookAt(tg);
 }
-const press = (name, t, dec = 0.16) => { let v = 0; for (const e of EV) if (e.b === name && t >= e.t && t - e.t < 0.9) v = Math.max(v, Math.exp(-(t - e.t) / dec)); return v; };
-const lastAge = (name, t) => { let a = 9; for (const e of EV) if (e.b === name && t >= e.t) a = Math.min(a, t - e.t); return a; };
+const press = (name, t, dec = 0.16) => { if (window.__SIM) return window.__SIM.press(name, t, dec); let v = 0; for (const e of EV) if (e.b === name && t >= e.t && t - e.t < 0.9) v = Math.max(v, Math.exp(-(t - e.t) / dec)); return v; };
+const lastAge = (name, t) => { if (window.__SIM) return window.__SIM.age(name, t); let a = 9; for (const e of EV) if (e.b === name && t >= e.t) a = Math.min(a, t - e.t); return a; };
 const expl = (k, t) => { const o = OPENS[k], c = CLACKS[k]; return ease((t - o) / 1.2) * (1 - inq((t - (c - 0.3)) / 0.3)); };
 function balance(t) { let b = 12.4; for (const e of CLAIMS) if (t >= e.t) b += e.d * ease((t - e.t - 0.3) / 0.25); return b; }
 
@@ -434,7 +435,10 @@ function drawUI(t, dark) {
 }
 
 function seek(tIn) {
-  const t = clamp(tIn, 0, DUR - 1e-3);
+  /* the simulator freezes the film on a pose and runs the live parts on its own clock */
+  const S = window.__SIM || null;
+  const t = S ? S.pose : clamp(tIn, 0, DUR - 1e-3);
+  const ct = S ? S.clock : t;
   /* lights down when the terminal opens, up again for the end */
   const dark = ease((t - T_POP) / 1.0) * (1 - ease((t - T_FOLD - 0.3) / 1.0));
   bgU.uDark.value = dark;
@@ -444,35 +448,35 @@ function seek(tIn) {
   M.smoke.opacity = mix(0.6, 0.46, dark);
 
   /* gentle hover */
-  rig.position.y = Math.sin(t * 1.05) * 0.05;
-  rig.rotation.z = Math.sin(t * 0.8 + 1) * 0.012;
+  rig.position.y = Math.sin(ct * 1.05) * 0.05;
+  rig.rotation.z = Math.sin(ct * 0.8 + 1) * 0.012;
 
   for (const k of Object.keys(DIST)) { const f = expl(k, t), d = DIST[k]; L[k].position.set(d[0] * f, d[1] * f, d[2] * f); }
-  GEARS.forEach((g, i) => { g.rotation.z = t * (i % 2 ? -1.1 : 1.1) * (1 + expl('mod', t) * 1.6); });
+  GEARS.forEach((g, i) => { g.rotation.z = ct * (i % 2 ? -1.1 : 1.1) * (1 + expl('mod', t) * 1.6); });
 
   /* core and board */
   const wake = ease((t - 2.4) / 1.0);
-  coreL.intensity = mix(0, 26, wake) * (1 - 0.4 * dark) * (0.82 + 0.18 * Math.sin(t * 10.47));
+  coreL.intensity = mix(0, 26, wake) * (1 - 0.4 * dark) * (0.82 + 0.18 * Math.sin(ct * 10.47));
   coreL.position.set(0, 0.3 + rig.position.y, 1.0);
   M.board.emissiveIntensity = mix(0.75, 1.5, wake);
   screenL.intensity = 24 * ease((t - T_ON + 0.8) / 0.8) * (1 - ease((t - T_FOLD) / 0.5));
 
   /* controls */
   for (const n of ['BUY', 'SELL', 'STAKE', 'CLAIM', 'DPAD']) {
-    const c = CTRL[n], p = press(n, t), a = lastAge(n, t);
+    const c = CTRL[n], p = press(n, ct), a = lastAge(n, ct);
     c.g.position.z = c.z0 - 0.09 * p;
     c.m.emissiveIntensity = (n === 'DPAD' ? 0.15 : 0.4) + 3.2 * p;
     c.ring.scale.setScalar(1 + a * 2.6); c.ring.material.opacity = Math.max(0, 1 - a / 0.3);
   }
-  const lp = press('L', t, 0.35), rp = press('CLAIM', t, 0.12);
+  const lp = press('L', ct, 0.35), rp = press('CLAIM', ct, 0.12);
   const on = (t < 2.6 || (t > T_POP && t < 20.0)) ? 1 : 0.2;
-  STICK.L.g.rotation.x = (Math.sin(t * 2.3) * 0.12 + lp * Math.sin(t * 15) * 0.32) * on;
-  STICK.L.g.rotation.y = (Math.cos(t * 1.7) * 0.14 + lp * Math.cos(t * 13) * 0.32) * on;
-  STICK.R.g.rotation.x = Math.cos(t * 2.1 + 1) * 0.11 * on - rp * 0.3;
-  STICK.R.g.rotation.y = Math.sin(t * 1.9) * 0.13 * on;
-  const la = lastAge('L', t); STICK.L.ring.scale.setScalar(1 + la * 2.2); STICK.L.ring.material.opacity = Math.max(0, 1 - la / 0.35);
-  const ca = lastAge('CLAIM', t); STICK.R.ring.scale.setScalar(1 + ca * 2.6); STICK.R.ring.material.opacity = Math.max(0, 1 - ca / 0.4);
-  const r2 = press('R2', t, 0.15); SH[1].t.position.z = -0.42 - r2 * 0.14; SH[1].t.rotation.x = r2 * 0.28;
+  STICK.L.g.rotation.x = (Math.sin(ct * 2.3) * 0.12 + lp * Math.sin(ct * 15) * 0.32) * on;
+  STICK.L.g.rotation.y = (Math.cos(ct * 1.7) * 0.14 + lp * Math.cos(ct * 13) * 0.32) * on;
+  STICK.R.g.rotation.x = Math.cos(ct * 2.1 + 1) * 0.11 * on - rp * 0.3;
+  STICK.R.g.rotation.y = Math.sin(ct * 1.9) * 0.13 * on;
+  const la = lastAge('L', ct); STICK.L.ring.scale.setScalar(1 + la * 2.2); STICK.L.ring.material.opacity = Math.max(0, 1 - la / 0.35);
+  const ca = lastAge('CLAIM', ct); STICK.R.ring.scale.setScalar(1 + ca * 2.6); STICK.R.ring.material.opacity = Math.max(0, 1 - ca / 0.4);
+  const r2 = press('R2', ct, 0.15); SH[1].t.position.z = -0.42 - r2 * 0.14; SH[1].t.rotation.x = r2 * 0.28;
 
   /* terminal: rises behind the body, then the wings open */
   const rise = back((t - T_POP) / 0.75) * (1 - inq((t - (T_END - 0.6)) / 0.6));
@@ -486,13 +490,15 @@ function seek(tIn) {
   wingL.rotation.y = mix(-Math.PI * 0.985, 0.17, wing);
   wingR.rotation.y = mix(Math.PI * 0.985, -0.17, wing);
   ARMS.forEach(a => { const top = SCR.position.y - 1.5 * scl, bot = 0.6; const len = Math.max(0.02, top - bot); a.scale.y = len; a.position.y = bot + len / 2; a.position.z = -0.5; a.visible = vis && len > 0.05; });
-  if (vis) drawScreen(t);
+  if (vis) { if (S) { S.draw(sg, 2408, 860); sTex.needsUpdate = true; } else drawScreen(t); }
 
   /* coins and sparks */
   const rs = V(P.Rs[0], P.Rs[1] + rig.position.y, 1.05);
   const dest = V(0, 3.9 + rig.position.y, 0.35);
-  CLAIMS.forEach((e, i) => {
-    const m = COINS[i], u = (t - e.t) / 0.55;
+  const CL = S ? S.claims.slice(-COINS.length) : CLAIMS;
+  COINS.forEach(m => { m.visible = false; });
+  CL.forEach((e, i) => {
+    const m = COINS[i], u = (ct - e.t) / 0.55;
     m.visible = u >= 0 && u < 1;
     if (!m.visible) return;
     const f = ease(u), arcZ = Math.sin(u * Math.PI) * 1.8;
@@ -501,8 +507,8 @@ function seek(tIn) {
     m.scale.setScalar(0.5 + Math.sin(Math.min(1, u * 1.6) * Math.PI / 2) * 0.75 * (1 - inq((u - 0.75) * 4)));
   });
   let np = 0;
-  for (const [ei, e] of CLAIMS.entries()) {
-    const a = t - e.t; if (a < 0 || a > 0.7) continue;
+  for (const [ei, e] of CL.entries()) {
+    const a = ct - e.t; if (a < 0 || a > 0.7) continue;
     for (let i = 0; i < 44 && np < NP; i++) {
       const th = rnd(i + ei * 13) * TAU, sp = 1.1 + rnd(i * 3 + ei) * 2.6, z = rnd(i * 5 + ei) * 1.4;
       pPos[np * 3] = rs.x + Math.cos(th) * (0.46 + sp * out(a / 0.7));
@@ -517,45 +523,23 @@ function seek(tIn) {
   camAt(t);
   renderer.render(scene, cam);
   scene.updateMatrixWorld(true);
-  drawUI(t, dark);
+  if (S) { c2.clearRect(0, 0, W, H); c2.fillStyle = 'rgba(246,242,255,.8)'; c2.font = '500 22px ' + SANS; c2.textAlign = 'right'; c2.textBaseline = 'alphabetic'; c2.fillText('Simulation. Paper SOL only. No wallet.', W - 40, H - 34); }
+  else drawUI(t, dark);
 }
 
 window.__R = { seek: tt => seek(tt), DUR };
 window.__L = L;
+/* which button is under a point in stage pixels, for clicks in the simulator */
+window.__R.hit = (x, y) => {
+  let best = null, bd = 1e9;
+  for (const n of ['BUY', 'SELL', 'STAKE', 'CLAIM']) {
+    const [px, py] = proj(CTRL[n].g.getWorldPosition(V(0, 0, 0)));
+    const d = Math.hypot(px - x, py - y);
+    if (d < bd) { bd = d; best = n; }
+  }
+  return bd < 64 ? best : null;
+};
 seek(0);
 document.documentElement.dataset.ready = '1';
-</script>
-<style>
-html,body{height:100%;background:#0b0916}
-#stage{position:absolute;left:0;top:0;transform-origin:0 0}
-#bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;font:500 13px "Space Grotesk",system-ui,sans-serif;color:#f3effc;background:rgba(14,10,28,.72);backdrop-filter:blur(8px);padding:7px 8px;border-radius:12px;white-space:nowrap;max-width:calc(100vw - 16px)}
-#bar button,#bar a{all:unset;cursor:pointer;padding:6px 11px;border-radius:8px;background:rgba(255,255,255,.1);color:#f3effc}
-#bar button:hover,#bar a:hover{background:rgba(255,255,255,.2)}
-#bar button:focus-visible,#bar a:focus-visible{outline:2px solid #14f195}
-#bar span{opacity:.72;padding:0 6px}
-@media(max-width:560px){#bar span{display:none}}
-</style>
-<div id="bar"><button id="snd" aria-pressed="false">Sound off</button><button id="rst">Restart</button><span>Concept render. No trading logic.</span><a href="https://github.com/kaivornxbt/autoplay-controller">GitHub</a></div>
-<script>
-(function () {
-  const DUR = 22.8, stage = document.getElementById('stage'), a = new Audio('media/autoplay-audio.m4a');
-  a.loop = true; a.preload = 'auto';
-  let t0 = null, sound = false;
-  function fit() { const k = Math.min(innerWidth / 1920, innerHeight / 1080); stage.style.transform = 'translate(' + (innerWidth - 1920 * k) / 2 + 'px,' + (innerHeight - 1080 * k) / 2 + 'px) scale(' + k + ')'; }
-  addEventListener('resize', fit); fit();
-  const now = () => ((performance.now() - t0) / 1000) % DUR;
-  function loop() {
-    if (document.documentElement.dataset.ready === '1') {
-      if (t0 === null) t0 = performance.now();
-      const t = now(); window.__R.seek(t);
-      if (sound && a.readyState >= 2 && Math.abs(a.currentTime - t) > 0.18) a.currentTime = t;
-    }
-    requestAnimationFrame(loop);
-  }
-  requestAnimationFrame(loop);
-  const s = document.getElementById('snd');
-  s.onclick = function () { sound = !sound; s.textContent = sound ? 'Sound on' : 'Sound off'; s.setAttribute('aria-pressed', sound); if (sound) { if (t0 !== null) a.currentTime = now(); a.play(); } else a.pause(); };
-  document.getElementById('rst').onclick = function () { t0 = performance.now(); if (sound) a.currentTime = 0; };
-})();
-</script>
+</script><script src="web/app.js"></script>
 </body></html>

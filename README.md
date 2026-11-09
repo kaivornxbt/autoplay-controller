@@ -7,15 +7,15 @@
 A one take 3D film about a game controller nobody is holding, written entirely in code.
 It unpacks layer by layer, folds out into a trading terminal, and presses its own buttons.
 
-**[Open the live scene](https://kaivornxbt.github.io/autoplay-controller/)** · [Watch the MP4](media/autoplay-controller.mp4) · [How it works](#how-it-works) · [Render your own](#render-your-own)
+**[Play it in your browser](https://kaivornxbt.github.io/autoplay-controller/)** · [Watch the MP4](media/autoplay-controller.mp4) · [Deploy your own AFK](#deploy-your-own-afk) · [How it works](#how-it-works) · [Render your own](#render-your-own)
 
 ![AUTOPLAY teaser](media/teaser.gif)
 
 </div>
 
 > [!IMPORTANT]
-> **AFK is a character, not a bot.** This repo has no trading logic, no wallet code, no RPC calls and no keys.
-> Every button press comes from a hand written timeline and the SOL balance is a list of nine numbers.
+> **AFK is a character, not a bot.** This repo has no wallet code, no RPC calls and no keys, and it never touches a real market.
+> In the film every button press comes from a hand written timeline and the SOL balance is a list of nine numbers. In the simulator everything is paper SOL on a random market.
 > There is no token and nothing to buy. If someone sells you "the AFK bot", it isn't from here.
 
 ## The pitch
@@ -56,6 +56,35 @@ One camera, no cuts, 22.8 seconds.
 </tr>
 </table>
 
+## Deploy your own AFK
+
+Press **Take the controller** on the [live page](https://kaivornxbt.github.io/autoplay-controller/) and the film hands you the machine.
+
+**Deploy agent.** Name it, set it up, take your hands away. Then watch it race Stock AFK on the exact same market for 60 seconds.
+
+| Dial | What it does |
+|---|---|
+| Risk | Position size and leverage, from 1x up to 3.25x. High enough and it gets liquidated |
+| Speed | How often it reacts. Faster means more trades and more fees |
+| Stake idle SOL | Safe yield, but less left to trade with |
+| Auto claim | Rewards only count once claimed. Leave this off and you can finish with money on the table |
+
+**Play by hand.** Same 60 seconds, your own thumbs. Use the buttons, click the actual 3D controller, or press `A` `S` `D` `F`. The HANDS counter finally moves, and it will judge you.
+
+When the round ends you get a result you can post. Your settings and best score stay in your own browser.
+
+### The house usually wins
+
+The market is a random walk with changing regimes and sudden wicks that skew downward. Nothing here is rigged to make you feel rich. Outcomes over 1,500 simulated rounds, starting from 10 paper SOL:
+
+| Setup | Median | Worst 5% | Best 5% | Rounds lost |
+|---|---|---|---|---|
+| Stock AFK (risk 5, speed 3, stake 30%) | +0.07 | -0.72 | +1.32 | 46% |
+| Full degen (risk 10, speed 5, no stake, no claim) | -0.51 | -3.19 | +5.09 | 59% |
+| Tortoise (risk 1, speed 1, stake 80%) | +0.52 | +0.41 | +0.59 | 0% |
+
+Tortoise looks unbeatable only because paper staking has no smart contract risk, no depeg and no bad day. Real markets do.
+
 ## Anatomy of the controller
 
 Everything is procedural geometry. No models were imported.
@@ -81,7 +110,7 @@ The whole film is one pure function:
 window.__R.seek(t)   // t in seconds → the exact frame
 ```
 
-Nothing accumulates between frames. No physics, no `deltaTime`, no random state. Layer offsets, camera position, button travel, the terminal log, the chart and every spark are computed from `t` alone. That is what makes the same file work as a live page and as a frame perfect offline render.
+Nothing accumulates between frames. No physics, no `deltaTime`, no random state. Layer offsets, camera position, button travel, the terminal log, the chart and every spark are computed from `t` alone. That is what makes the same file work as a live page and as a frame perfect offline render. The simulator sets `window.__SIM`, which freezes the film on a pose and feeds the buttons, coins and terminal from a live clock instead.
 
 The timeline is the single source of truth. `render/make_film.py` generates one list of events:
 
@@ -142,7 +171,7 @@ cd autoplay-controller
 python -m http.server 8000
 ```
 
-Then open `http://localhost:8000`. No build step and no install. Sound stays off until you press the button, as browsers require.
+Then open `http://localhost:8000`. No install needed. Sound stays off until you press the button, as browsers require. If you edit the scene, run `python render/build_page.py` from the repo root.
 
 ## Render your own
 
@@ -174,13 +203,13 @@ Good places to start poking:
 
 ## FAQ
 
-**Does it trade?** No. See the box at the top.
+**Does it trade?** No. The simulator is paper only, on a market generated in your browser.
 
 **Can I connect a wallet?** There is nothing to connect it to.
 
 **Is there a token?** No, and there won't be one attached to this repo.
 
-**Then why does it say it earned SOL?** Because it's a film. The balance is scripted and the video says so on screen.
+**Then why does it say it earned SOL?** Because it's a film. The balance is scripted and the video says so on screen. In the simulator the number is paper and it goes down plenty.
 
 **Why a controller?** Because a bot that clicks for you is funnier when you can see the thumbs are missing.
 
@@ -189,12 +218,15 @@ Good places to start poking:
 ## Project layout
 
 ```
-index.html              the live scene
+index.html              the live page, built by render/build_page.py
+web/app.js              film player, paper market, agent, simulator UI
+web/app.css             simulator styles
 vendor/three-bundle.js  Three.js with RoomEnvironment
 media/                  film, audio, stills
 render/
   scene.src.html        the 3D scene and the terminal UI
   make_film.py          event list, frame capture, encode
+  build_page.py         rebuilds index.html
   score.py              the soundtrack
 ```
 
@@ -202,4 +234,4 @@ render/
 
 Built by [Kaivorn](https://x.com/kaivornxbt). Rendered with [Three.js](https://threejs.org), set in Space Grotesk and JetBrains Mono.
 
-Code under the [MIT License](LICENSE). Not financial advice, not a product, not a bot. It's a controller that plays itself.
+Code under the [MIT License](LICENSE). Not financial advice, not a product, not a bot, and doing well in the simulator means nothing about real markets. It's a controller that plays itself.
