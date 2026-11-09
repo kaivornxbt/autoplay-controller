@@ -1,0 +1,561 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AUTOPLAY, the controller that plays itself</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="A one take 3D film about a game controller nobody is holding. Concept render, no trading logic.">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=block" rel="stylesheet">
+<style>
+html,body{margin:0;background:#e9e2f3;overflow:hidden}
+#stage{position:relative;width:1920px;height:1080px}
+#gl,#ui{position:absolute;left:0;top:0;width:1920px;height:1080px}
+</style>
+<script src="vendor/three-bundle.js"></script></head>
+<body><div id="stage"><canvas id="gl"></canvas><canvas id="ui"></canvas></div>
+<script type="module">
+await Promise.all(['700 80px "Space Grotesk"', '600 70px "Space Grotesk"', '500 40px "Space Grotesk"', '500 40px "JetBrains Mono"', '700 40px "JetBrains Mono"'].map(f => document.fonts.load(f)));
+await document.fonts.ready;
+const T = THREE, DUR = 22.8, TAU = Math.PI * 2, W = 1920, H = 1080;
+const EV = [{"t": 0.6, "b": "BUY"}, {"t": 1.2, "b": "SELL"}, {"t": 1.5, "b": "DPAD"}, {"t": 1.8, "b": "CLAIM"}, {"t": 2.1, "b": "R2"}, {"t": 12.0, "b": "L", "tag": "STICK", "log": "scan routes"}, {"t": 12.3, "b": "BUY", "tag": "BUY", "log": "entry found"}, {"t": 12.6, "b": "R2", "tag": "R2", "log": "order filled"}, {"t": 12.9, "b": "CLAIM", "tag": "CLAIM", "d": 0.31, "log": "+0.31 SOL"}, {"t": 13.2, "b": "SELL", "tag": "SELL", "log": "target hit"}, {"t": 13.5, "b": "CLAIM", "tag": "CLAIM", "d": 0.18, "log": "+0.18 SOL"}, {"t": 13.8, "b": "STAKE", "tag": "STAKE", "log": "idle balance"}, {"t": 14.1, "b": "CLAIM", "tag": "CLAIM", "d": 0.42, "log": "+0.42 SOL"}, {"t": 14.4, "b": "L", "tag": "STICK", "log": "scan routes"}, {"t": 14.7, "b": "BUY", "tag": "BUY", "log": "entry found"}, {"t": 15.0, "b": "R2", "tag": "R2", "log": "order filled"}, {"t": 15.3, "b": "CLAIM", "tag": "CLAIM", "d": 0.27, "log": "+0.27 SOL"}, {"t": 15.6, "b": "SELL", "tag": "SELL", "log": "target hit"}, {"t": 15.9, "b": "CLAIM", "tag": "CLAIM", "d": 0.36, "log": "+0.36 SOL"}, {"t": 16.2, "b": "STAKE", "tag": "STAKE", "log": "idle balance"}, {"t": 16.5, "b": "CLAIM", "tag": "CLAIM", "d": 0.22, "log": "+0.22 SOL"}, {"t": 16.8, "b": "L", "tag": "STICK", "log": "scan routes"}, {"t": 17.1, "b": "BUY", "tag": "BUY", "log": "entry found"}, {"t": 17.4, "b": "R2", "tag": "R2", "log": "order filled"}, {"t": 17.7, "b": "CLAIM", "tag": "CLAIM", "d": 0.51, "log": "+0.51 SOL"}, {"t": 18.0, "b": "SELL", "tag": "SELL", "log": "target hit"}, {"t": 18.3, "b": "CLAIM", "tag": "CLAIM", "d": 0.19, "log": "+0.19 SOL"}, {"t": 18.6, "b": "STAKE", "tag": "STAKE", "log": "idle balance"}, {"t": 18.9, "b": "CLAIM", "tag": "CLAIM", "d": 0.33, "log": "+0.33 SOL"}];
+const VIO = '#9945ff', MNT = '#14f195', SANS = '"Space Grotesk"', MONO = '"JetBrains Mono"';
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => { x = clamp(x); return x * x * (3 - 2 * x); };
+const out = x => 1 - Math.pow(1 - clamp(x), 3);
+const inq = x => { x = clamp(x); return x * x * x; };
+const back = x => { x = clamp(x); const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const mix = (a, b, f) => a + (b - a) * f;
+const V = (x, y, z) => new T.Vector3(x, y, z);
+const rnd = s => { const x = Math.sin(s * 127.1) * 43758.5453; return x - Math.floor(x); };
+
+/* times, all on the 100 BPM grid (0.3 s eighths) */
+const T_POP = 10.2, T_WING = 10.8, T_BOOT = 11.1, T_ON = 12.0, T_FOLD = 19.2, T_END = 20.4;
+const CLACKS = { rear: 8.4, bat: 8.7, mod: 9.0, btn: 9.3, front: 9.6, top: 9.9 };
+const OPENS = { top: 2.4, front: 3.6, btn: 3.9, mod: 4.2, bat: 4.2, rear: 4.2 };
+const DIST = { front: [0, 0, 3.1], btn: [0, 0, 2.05], mod: [0, 0, 0.95], bat: [0, 0, -1.25], rear: [0, 0, -2.5], top: [0, 0.85, 0.15] };
+
+const glc = document.getElementById('gl');
+const renderer = new T.WebGLRenderer({ canvas: glc, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(W, H, false);
+renderer.toneMapping = T.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+const scene = new T.Scene();
+const pm = new T.PMREMGenerator(renderer);
+scene.environment = pm.fromScene(new T.RoomEnvironment(), 0.03).texture;
+const cam = new T.PerspectiveCamera(26, W / H, 0.1, 200);
+const key = new T.DirectionalLight(0xffffff, 1.7); key.position.set(-6, 12, 14); scene.add(key);
+const rim = new T.DirectionalLight(0xb48cff, 1.1); rim.position.set(9, 4, -10); scene.add(rim);
+const coreL = new T.PointLight(0x9945ff, 0, 14, 1.3); coreL.position.set(0, 0.2, 1.2); scene.add(coreL);
+const screenL = new T.PointLight(0x14f195, 0, 12, 1.4); screenL.position.set(0, 2.2, 2.4); scene.add(screenL);
+
+/* studio backdrop: pearl with the lights on, indigo with the agent running */
+const bgU = { uDark: { value: 0 }, uAsp: { value: W / H } };
+const bg = new T.Mesh(new T.PlaneGeometry(2, 2), new T.ShaderMaterial({
+  uniforms: bgU, depthTest: false, depthWrite: false, toneMapped: false,
+  vertexShader: 'varying vec2 v;void main(){v=uv;gl_Position=vec4(position.xy,1.,1.);}',
+  fragmentShader: `varying vec2 v;uniform float uDark,uAsp;
+  void main(){vec2 p=(v-vec2(.5,.52))*vec2(uAsp,1.);float d=clamp(length(p)/.98,0.,1.);d=d*d*(3.-2.*d);
+  vec3 a=mix(vec3(.972,.950,.992),vec3(.800,.745,.885),d);
+  vec3 b=mix(vec3(.150,.098,.300),vec3(.030,.022,.070),d);
+  vec3 c=mix(a,b,uDark)+vec3(-.05,-.12,.10)*4.*uDark*(1.-uDark);c+=(fract(sin(dot(gl_FragCoord.xy,vec2(12.9898,78.233)))*43758.5453)-.5)/255.;
+  gl_FragColor=vec4(c,1.);}`,
+}));
+bg.frustumCulled = false; bg.renderOrder = -10; scene.add(bg);
+
+function cvs(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; }
+function tex(c, srgb = true) { const t = new T.CanvasTexture(c); if (srgb) t.colorSpace = T.SRGBColorSpace; t.anisotropy = 12; return t; }
+function solGrad(g, x0, y0, x1, y1) { const l = g.createLinearGradient(x0, y0, x1, y1); l.addColorStop(0, VIO); l.addColorStop(1, MNT); return l; }
+/* three slanted bars, drawn inside box x,y,w,h */
+function bars(g, x, y, w, h, fill) {
+  g.fillStyle = fill; const bh = h * 0.235, sk = w * 0.2;
+  [[0, 1], [0.385, -1], [0.77, 1]].forEach(([f, d]) => {
+    const yy = y + h * f; g.beginPath();
+    if (d > 0) { g.moveTo(x + sk, yy); g.lineTo(x + w, yy); g.lineTo(x + w - sk, yy + bh); g.lineTo(x, yy + bh); }
+    else { g.moveTo(x, yy); g.lineTo(x + w - sk, yy); g.lineTo(x + w, yy + bh); g.lineTo(x + sk, yy + bh); }
+    g.closePath(); g.fill();
+  });
+}
+
+/* silhouette */
+function halfPts() {
+  const p = new T.Path(); p.moveTo(0, 1.32); p.lineTo(1.2, 1.32);
+  p.bezierCurveTo(1.9, 1.32, 2.5, 1.5, 2.95, 1.22);
+  p.bezierCurveTo(3.35, 0.9, 3.5, -0.2, 3.55, -1.0);
+  p.bezierCurveTo(3.6, -1.9, 3.35, -2.42, 2.85, -2.42);
+  p.bezierCurveTo(2.4, -2.42, 2.15, -2.0, 1.85, -1.45);
+  p.bezierCurveTo(1.6, -1.0, 1.35, -0.82, 0.95, -0.82);
+  p.lineTo(0, -0.82);
+  return p.getPoints(48);
+}
+const HALF = halfPts();
+function silhouette(s = 1) {
+  const pts = HALF.map(v => new T.Vector2(v.x * s, v.y * s));
+  const left = HALF.slice().reverse().filter(v => v.x > 1e-6).map(v => new T.Vector2(-v.x * s, v.y * s));
+  return new T.Shape(pts.concat(left));
+}
+function rr(w, h, r) {
+  const s = new T.Shape(), x = -w / 2, y = -h / 2;
+  s.moveTo(x + r, y); s.lineTo(x + w - r, y); s.absarc(x + w - r, y + r, r, -Math.PI / 2, 0);
+  s.lineTo(x + w, y + h - r); s.absarc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+  s.lineTo(x + r, y + h); s.absarc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+  s.lineTo(x, y + r); s.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
+  return s;
+}
+function ex(shape, depth, bt = 0, bs = 0, seg = 6) {
+  return new T.ExtrudeGeometry(shape, { depth, bevelEnabled: bt > 0, bevelThickness: bt, bevelSize: bs, bevelSegments: seg, curveSegments: 40 });
+}
+const hole = (x, y, r) => { const h = new T.Path(); h.absarc(x, y, r, 0, TAU, true); return h; };
+const P = {
+  Ls: [-2.05, 0.42], Rs: [1.05, -0.3], Dp: [-1.05, -0.3], Ab: [2.05, 0.42], core: [0, 0.3],
+};
+
+const mat = (c, r, m, x = {}) => new T.MeshStandardMaterial({ color: c, roughness: r, metalness: m, ...x });
+const M = {
+  smoke: new T.MeshPhysicalMaterial({ color: 0x1b1530, roughness: 0.08, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.04, transparent: true, opacity: 0.6, depthWrite: false, envMapIntensity: 1.5 }),
+  pearl: mat(0xefe9f6, 0.42, 0.05),
+  anod: mat(0x6f3cf0, 0.3, 1, { envMapIntensity: 1.4 }),
+  mint: mat(0x12d48a, 0.28, 1, { envMapIntensity: 1.3 }),
+  steel: mat(0xc9c7d6, 0.26, 1),
+  dark: mat(0x17141f, 0.5, 0.45),
+  black: mat(0x0e0c14, 0.32, 0.5),
+  rubber: mat(0x26222f, 0.92, 0),
+  wire: mat(0x1fbf94, 0.35, 0.9),
+};
+function addM(geo, m, parent, x = 0, y = 0, z = 0) { const o = new T.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; }
+
+const rig = new T.Group(); scene.add(rig);
+const L = {}; ['front', 'btn', 'mod', 'pcb', 'bat', 'rear', 'top', 'scr'].forEach(k => { L[k] = new T.Group(); rig.add(L[k]); });
+
+/* rear shell and grips */
+addM(ex(silhouette(), 0.12, 0.14, 0.16, 8), M.pearl, L.rear, 0, 0, -0.26);
+{
+  const [c, g] = cvs(256, 256); g.fillStyle = '#808080'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) { g.fillStyle = '#e4e4e4'; g.beginPath(); g.arc(8 + i * 16 + (j % 2) * 8, 8 + j * 16, 4, 0, TAU); g.fill(); }
+  const bt = tex(c, false); bt.wrapS = bt.wrapT = T.RepeatWrapping; bt.repeat.set(2.8, 2.8);
+  M.rubber.bumpMap = bt; M.rubber.bumpScale = 0.9;
+  [1, -1].forEach(sg => {
+    const pts = HALF.filter(v => v.y < -0.82 + 0.42 * (v.x - 1.3) && v.x > 1.2).map(v => new T.Vector2(v.x * sg * 1.0, v.y));
+    if (sg < 0) pts.reverse();
+    const s = new T.Shape(pts);
+    addM(ex(s, 0.5, 0.17, 0.09, 8), M.rubber, L.rear, 0, 0, -0.37);
+  });
+}
+
+/* battery */
+{
+  addM(ex(rr(3.3, 0.74, 0.1), 0.34, 0.04, 0.04), M.dark, L.bat, 0, 0.45, -0.4);
+  const [c, g] = cvs(1024, 240); g.fillStyle = '#100d1a'; g.fillRect(0, 0, 1024, 240);
+  g.fillStyle = solGrad(g, 0, 0, 1024, 0); g.fillRect(0, 214, 1024, 26);
+  g.fillStyle = '#f2eefb'; g.font = '700 74px ' + SANS; g.textBaseline = 'middle'; g.fillText('RUNS WHILE YOU SLEEP', 44, 104);
+  addM(new T.PlaneGeometry(3.2, 0.68), new T.MeshBasicMaterial({ map: tex(c), toneMapped: false }), L.bat, 0, 0.45, -0.015);
+}
+
+/* board */
+{
+  const [c, g] = cvs(2048, 1536);
+  g.fillStyle = '#100c1e'; g.fillRect(0, 0, 2048, 1536);
+  const gr = solGrad(g, 0, 0, 2048, 900); g.strokeStyle = gr; g.lineCap = 'round'; g.lineJoin = 'round';
+  for (let i = 0; i < 90; i++) {
+    let x = rnd(i + 1) * 2048, y = rnd(i + 200) * 1536; g.lineWidth = rnd(i + 90) > 0.8 ? 7 : 3.5; g.globalAlpha = 0.55 + rnd(i + 8) * 0.45;
+    g.beginPath(); g.moveTo(x, y);
+    for (let k = 0; k < 5; k++) { const d = 60 + rnd(i * 3 + k) * 190, a = Math.floor(rnd(i * 7 + k) * 8) * TAU / 8; x += Math.cos(a) * d; y += Math.sin(a) * d; g.lineTo(x, y); }
+    g.stroke(); g.fillStyle = gr; g.beginPath(); g.arc(x, y, 9, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+  const t = tex(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(1 / 7.2, 1 / 5.4); t.offset.set(0.5, 0.5);
+  const em = tex(c); em.wrapS = em.wrapT = T.RepeatWrapping; em.repeat.copy(t.repeat); em.offset.copy(t.offset);
+  const fm = new T.MeshStandardMaterial({ map: t, emissiveMap: em, emissive: 0xffffff, emissiveIntensity: 0.8, roughness: 0.55, metalness: 0.2 });
+  M.board = fm;
+  addM(ex(silhouette(0.9), 0.05), [fm, M.dark], L.pcb, 0, 0, -0.04);
+  for (let i = 0; i < 22; i++) {
+    const a = rnd(i + 40), x = (a - 0.5) * 4.6, y = -0.45 + rnd(i + 71) * 1.4, w = 0.14 + rnd(i + 5) * 0.34;
+    if (Math.abs(x) < 0.85 && y > -0.5) continue;
+    addM(new T.BoxGeometry(w, w * 0.7, 0.07), rnd(i) > 0.6 ? M.steel : M.black, L.pcb, x, y, 0.05);
+  }
+  /* agent core */
+  addM(ex(rr(1.32, 1.32, 0.1), 0.1, 0.03, 0.03), M.steel, L.pcb, P.core[0], P.core[1], 0.01);
+  const [cc, gg] = cvs(640, 640);
+  gg.fillStyle = '#0b0815'; gg.fillRect(0, 0, 640, 640);
+  bars(gg, 160, 112, 320, 240, solGrad(gg, 160, 352, 480, 112));
+  gg.fillStyle = '#f3effc'; gg.textAlign = 'center'; gg.font = '700 76px ' + SANS; gg.fillText('AGENT', 320, 460); gg.font = '500 52px ' + MONO; gg.fillStyle = '#14f195'; gg.fillText('CORE', 320, 540);
+  M.coreTop = new T.MeshBasicMaterial({ map: tex(cc), toneMapped: false });
+  addM(new T.PlaneGeometry(1.12, 1.12), M.coreTop, L.pcb, P.core[0], P.core[1], 0.15);
+}
+
+/* gears and coils under the sticks and shoulders */
+function gearShape(n, a, b) {
+  const s = new T.Shape(); for (let i = 0; i < n * 4; i++) { const r = (i % 4 < 2) ? b : a, th = i / (n * 4) * TAU, x = Math.cos(th) * r, y = Math.sin(th) * r; i ? s.lineTo(x, y) : s.moveTo(x, y); } s.closePath();
+  s.holes.push(hole(0, 0, a * 0.42)); return s;
+}
+const GEARS = [];
+[P.Ls, P.Rs].forEach((p, i) => {
+  GEARS.push(addM(ex(gearShape(18, 0.46, 0.56), 0.08, 0.01, 0.01), i ? M.mint : M.anod, L.mod, p[0], p[1], 0));
+  addM(new T.CylinderGeometry(0.2, 0.26, 0.5, 40).rotateX(Math.PI / 2), M.steel, L.mod, p[0], p[1], 0.26);
+});
+[-1, 1].forEach(sg => {
+  for (let i = 0; i < 12; i++) addM(new T.TorusGeometry(0.23, 0.04, 12, 40).rotateY(Math.PI / 2), M.wire, L.mod, sg * (2.28 + i * 0.075), 1.0 - 0.4, 0.14);
+  GEARS.push(addM(ex(gearShape(14, 0.2, 0.26), 0.08, 0.01, 0.01), M.anod, L.mod, sg * 1.95, 0.6 + 0.05, 0.1));
+});
+
+/* smoked front shell */
+{
+  const s = silhouette();
+  s.holes.push(hole(P.Ls[0], P.Ls[1], 0.56), hole(P.Rs[0], P.Rs[1], 0.56), hole(P.Dp[0], P.Dp[1], 0.6), hole(P.Ab[0], P.Ab[1], 0.72));
+  const m = addM(ex(s, 0.12, 0.14, 0.16, 10), M.smoke, L.front, 0, 0, 0.14); m.renderOrder = 6;
+  const [c, g] = cvs(1024, 200); g.fillStyle = '#f5f1fd'; g.font = '600 112px ' + SANS; g.textAlign = 'center'; g.textBaseline = 'middle';
+  if ('letterSpacing' in g) g.letterSpacing = '26px'; g.fillText('KAIVORN', 512, 104);
+  const lg = addM(new T.PlaneGeometry(2.16, 0.42), new T.MeshBasicMaterial({ map: tex(c), transparent: true, depthWrite: false, toneMapped: false }), L.front, 0, 0.92, 0.415); lg.renderOrder = 8;
+}
+
+/* controls */
+function btnTop(label, color) {
+  const [c, g] = cvs(256, 256); g.clearRect(0, 0, 256, 256); g.fillStyle = '#f6f2ff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '700 ' + (label.length > 4 ? 62 : 74) + 'px ' + SANS; g.fillText(label, 128, 132);
+  return new T.MeshBasicMaterial({ map: tex(c), transparent: true, toneMapped: false, depthWrite: false });
+}
+const CTRL = {};
+function button(name, x, y, c) {
+  const g = new T.Group(); g.position.set(x, y, 0.3); L.btn.add(g);
+  const pts = [[0.001, 0.2], [0.23, 0.2], [0.27, 0.17], [0.28, 0.0]].map(a => new T.Vector2(a[0], a[1]));
+  const m = new T.MeshStandardMaterial({ color: 0x1a1526, roughness: 0.25, metalness: 0.6, emissive: new T.Color(c), emissiveIntensity: 0.4, side: T.DoubleSide });
+  const b = addM(new T.LatheGeometry(pts, 48).rotateX(Math.PI / 2), m, g);
+  addM(new T.PlaneGeometry(0.46, 0.46), btnTop(name, c), g, 0, 0, 0.206).renderOrder = 9;
+  const ring = addM(new T.TorusGeometry(0.3, 0.012, 8, 56), new T.MeshBasicMaterial({ color: c, transparent: true, opacity: 0, toneMapped: false, depthWrite: false }), g, 0, 0, 0.2); ring.renderOrder = 9;
+  CTRL[name] = { g, m, ring, z0: 0.3 };
+}
+button('BUY', P.Ab[0], P.Ab[1] - 0.42, '#14f195');
+button('SELL', P.Ab[0] + 0.42, P.Ab[1], '#ff5fa8');
+button('STAKE', P.Ab[0] - 0.42, P.Ab[1], '#7ab8ff');
+button('CLAIM', P.Ab[0], P.Ab[1] + 0.42, '#c9a0ff');
+{
+  const s = new T.Shape(); const a = 0.15, b = 0.48;
+  [[-a, -b], [a, -b], [a, -a], [b, -a], [b, a], [a, a], [a, b], [-a, b], [-a, a], [-b, a], [-b, -a], [-a, -a]].forEach((p, i) => i ? s.lineTo(p[0], p[1]) : s.moveTo(p[0], p[1])); s.closePath();
+  const g = new T.Group(); g.position.set(P.Dp[0], P.Dp[1], 0.3); L.btn.add(g);
+  const m = new T.MeshStandardMaterial({ color: 0x6f3cf0, roughness: 0.28, metalness: 1, emissive: new T.Color(VIO), emissiveIntensity: 0.15 });
+  addM(ex(s, 0.08, 0.04, 0.03), m, g);
+  const ring = addM(new T.TorusGeometry(0.5, 0.012, 8, 56), new T.MeshBasicMaterial({ color: VIO, transparent: true, opacity: 0, toneMapped: false, depthWrite: false }), g, 0, 0, 0.2); ring.renderOrder = 9;
+  CTRL.DPAD = { g, m, ring, z0: 0.3 };
+}
+const STICK = {};
+function stick(name, p, c) {
+  const g = new T.Group(); g.position.set(p[0], p[1], 0.32); L.btn.add(g);
+  addM(new T.CylinderGeometry(0.13, 0.17, 0.52, 28).rotateX(Math.PI / 2), M.steel, g, 0, 0, 0.14);
+  const pts = [[0.001, 0.05], [0.26, 0.09], [0.38, 0.15], [0.44, 0.12], [0.45, 0.04], [0.33, 0.0]].map(a => new T.Vector2(a[0], a[1]));
+  addM(new T.LatheGeometry(pts, 64).rotateX(Math.PI / 2), mat(0x15111f, 0.42, 0.3, { side: T.DoubleSide }), g, 0, 0, 0.36);
+  const led = new T.MeshBasicMaterial({ color: new T.Color(c).multiplyScalar(1.0), toneMapped: false });
+  addM(new T.TorusGeometry(0.47, 0.024, 12, 80), led, g, 0, 0, 0.42);
+  const ring = addM(new T.TorusGeometry(0.5, 0.012, 8, 72), new T.MeshBasicMaterial({ color: c, transparent: true, opacity: 0, toneMapped: false, depthWrite: false }), L.btn, p[0], p[1], 0.82); ring.renderOrder = 9;
+  STICK[name] = { g, led, ring };
+}
+stick('L', P.Ls, VIO); stick('R', P.Rs, MNT);
+CTRL.L = { ring: STICK.L.ring, m: null };
+
+/* shoulders */
+const SH = [];
+[-1, 1].forEach(sg => {
+  const b = addM(ex(rr(1.2, 0.26, 0.11), 0.3, 0.06, 0.06), M.anod, L.top, sg * 2.08, 1.42 - 0.02, -0.16); b.rotation.z = -sg * 0.1;
+  const t = addM(ex(rr(0.96, 0.34, 0.14), 0.16, 0.06, 0.05), M.mint, L.top, sg * 2.14, 1.56, -0.42); t.rotation.z = -sg * 0.1;
+  SH.push({ t, sg });
+});
+CTRL.R2 = { t: SH[1].t, m: null, ring: null };
+
+/* tri-fold terminal */
+const SW = 8.4, SH_ = 3.0;
+const [sc, sg] = cvs(2408, 860), sTex = tex(sc);
+const scrMat = new T.MeshBasicMaterial({ map: sTex, toneMapped: false });
+function planeU(w, h, u0, u1) { const g = new T.PlaneGeometry(w, h), uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setX(i, mix(u0, u1, uv.getX(i))); return g; }
+const bez = (w, h) => ex(rr(w + 0.14, h + 0.14, 0.09), 0.08, 0.03, 0.03);
+const SCR = new T.Group(); L.scr.add(SCR);
+const cen = new T.Group(); SCR.add(cen);
+addM(bez(SW / 2, SH_), M.black, cen, 0, 0, -0.09); addM(planeU(SW / 2, SH_, 0.25, 0.75), scrMat, cen, 0, 0, 0.022);
+const wingL = new T.Group(), wingR = new T.Group(); wingL.position.set(-SW / 4, 0, -0.03); wingR.position.set(SW / 4, 0, -0.03); cen.add(wingL, wingR);
+addM(bez(SW / 4, SH_), M.black, wingL, -SW / 8, 0, -0.06); addM(planeU(SW / 4, SH_, 0, 0.25), scrMat, wingL, -SW / 8, 0, 0.052);
+addM(bez(SW / 4, SH_), M.black, wingR, SW / 8, 0, -0.06); addM(planeU(SW / 4, SH_, 0.75, 1), scrMat, wingR, SW / 8, 0, 0.052);
+const ARMS = [-1.1, 1.1].map(x => addM(new T.CylinderGeometry(0.08, 0.08, 1, 20), M.steel, L.scr, x, 0, -0.14));
+
+/* coins flying into the balance */
+const [cn, cg] = cvs(512, 512); cg.fillStyle = '#100c1e'; cg.fillRect(0, 0, 512, 512); bars(cg, 116, 136, 280, 240, solGrad(cg, 116, 376, 396, 136));
+const coinTop = new T.MeshBasicMaterial({ map: tex(cn), toneMapped: false });
+const coinEdge = mat(0x8a5cff, 0.28, 1);
+const CLAIMS = EV.filter(e => e.b === 'CLAIM' && e.d);
+const COINS = CLAIMS.map(() => { const m = new T.Mesh(new T.CylinderGeometry(0.34, 0.34, 0.07, 64), [coinEdge, coinTop, coinTop]); m.visible = false; scene.add(m); return m; });
+
+/* sparks */
+const NP = 220, pPos = new Float32Array(NP * 3), pCol = new Float32Array(NP * 3);
+const pg = new T.BufferGeometry(); pg.setAttribute('position', new T.BufferAttribute(pPos, 3)); pg.setAttribute('color', new T.BufferAttribute(pCol, 3));
+const [dc, dg] = cvs(64, 64); const rg = dg.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, '#fff'); rg.addColorStop(1, 'rgba(255,255,255,0)'); dg.fillStyle = rg; dg.fillRect(0, 0, 64, 64);
+const sparks = new T.Points(pg, new T.PointsMaterial({ size: 0.13, map: tex(dc), vertexColors: true, transparent: true, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false }));
+sparks.frustumCulled = false; scene.add(sparks);
+
+/* soft floor shadow */
+const [fc, fg] = cvs(512, 256); const frg = fg.createRadialGradient(256, 128, 8, 256, 128, 128); frg.addColorStop(0, 'rgba(46,28,84,.46)'); frg.addColorStop(1, 'rgba(46,28,84,0)');
+fg.setTransform(2, 0, 0, 1, -256, 0); fg.fillStyle = frg; fg.fillRect(0, 0, 512, 256);
+const floorM = new T.MeshBasicMaterial({ map: tex(fc), transparent: true, depthWrite: false, toneMapped: false });
+const floor = addM(new T.PlaneGeometry(12, 6).rotateX(-Math.PI / 2), floorM, scene, 0, -3.7, 0);
+
+/* camera path, one take */
+const K = [
+  { t: 0, tgt: [0, -0.42, 0], az: -0.42, el: 0.14, d: 19.5 },
+  { t: 2.4, tgt: [0, -0.42, 0], az: -0.12, el: 0.1, d: 17.4 },
+  { t: 3.6, tgt: [0, -0.2, 0], az: 0.3, el: 0.16, d: 18.5 },
+  { t: 5.4, tgt: [0, -0.3, 0.3], az: 1.04, el: 0.24, d: 20.5 },
+  { t: 6.9, tgt: [0, -0.3, 0.3], az: 1.14, el: 0.26, d: 19.5 },
+  { t: 7.8, tgt: [0, 0.25, 0.1], az: 0.58, el: 0.42, d: 8.2 },
+  { t: 8.4, tgt: [0, 0.25, 0.1], az: 0.5, el: 0.4, d: 7.8 },
+  { t: 9.9, tgt: [0, -0.42, 0], az: 0, el: 0.05, d: 17.4 },
+  { t: 10.75, tgt: [0, 1.3, 0], az: -0.08, el: 0.04, d: 18.6 },
+  { t: 19.2, tgt: [0, 2.0, 0], az: 0.06, el: 0.0, d: 15.2 },
+  { t: 19.75, tgt: [0, 1.4, 0], az: 0.02, el: 0.03, d: 18.2 },
+  { t: 20.6, tgt: [0, -0.42, 0], az: -0.12, el: 0.1, d: 17.8 },
+  { t: 22.8, tgt: [0, -0.42, 0], az: -0.28, el: 0.12, d: 17.0 },
+];
+function camAt(t) {
+  let i = 0; while (i < K.length - 2 && t >= K[i + 1].t) i++;
+  const a = K[i], b = K[i + 1], f = ease((t - a.t) / (b.t - a.t));
+  const az = mix(a.az, b.az, f), el = mix(a.el, b.el, f), d = mix(a.d, b.d, f);
+  const tg = V(mix(a.tgt[0], b.tgt[0], f), mix(a.tgt[1], b.tgt[1], f), mix(a.tgt[2], b.tgt[2], f));
+  cam.position.set(tg.x + Math.sin(az) * Math.cos(el) * d, tg.y + Math.sin(el) * d, tg.z + Math.cos(az) * Math.cos(el) * d);
+  cam.lookAt(tg);
+}
+const press = (name, t, dec = 0.16) => { let v = 0; for (const e of EV) if (e.b === name && t >= e.t && t - e.t < 0.9) v = Math.max(v, Math.exp(-(t - e.t) / dec)); return v; };
+const lastAge = (name, t) => { let a = 9; for (const e of EV) if (e.b === name && t >= e.t) a = Math.min(a, t - e.t); return a; };
+const expl = (k, t) => { const o = OPENS[k], c = CLACKS[k]; return ease((t - o) / 1.2) * (1 - inq((t - (c - 0.3)) / 0.3)); };
+function balance(t) { let b = 12.4; for (const e of CLAIMS) if (t >= e.t) b += e.d * ease((t - e.t - 0.3) / 0.25); return b; }
+
+function fit(g, s, x, y, max) { g.fillText(s, x, y, max); }
+function drawScreen(t) {
+  const g = sg, w = 2408, h = 860, wa = 602, wb = 1806;
+  g.fillStyle = '#090713'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = 'rgba(153,69,255,.10)'; g.lineWidth = 2;
+  for (let x = 0; x < w; x += 80) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+  for (let y = 0; y < h; y += 80) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  if (t < T_ON) {
+    const p = ease((t - T_BOOT) / (T_ON - T_BOOT - 0.15));
+    g.textAlign = 'center'; g.fillStyle = '#f3effc'; g.font = '700 150px ' + SANS; g.fillText('AUTOPLAY', w / 2, 400);
+    g.font = '500 54px ' + MONO; g.fillStyle = '#14f195'; g.fillText(p < 1 ? 'waking the agent' : 'agent online', w / 2, 500);
+    g.fillStyle = 'rgba(255,255,255,.13)'; g.fillRect(w / 2 - 400, 560, 800, 14);
+    g.fillStyle = solGrad(g, w / 2 - 400, 0, w / 2 + 400, 0); g.fillRect(w / 2 - 400, 560, 800 * p, 14);
+    sTex.needsUpdate = true; return;
+  }
+  /* dividers */
+  g.fillStyle = 'rgba(255,255,255,.16)'; g.fillRect(wa - 1, 0, 3, h); g.fillRect(wb - 1, 0, 3, h);
+  /* log */
+  g.fillStyle = '#b8add0'; g.font = '700 42px ' + SANS; g.fillText('AGENT LOG', 44, 76);
+  const seen = EV.filter(e => e.log && e.t <= t).slice(-9);
+  seen.forEach((e, i) => {
+    const y = 150 + i * 76, nw = i === seen.length - 1;
+    if (nw) { g.fillStyle = 'rgba(20,241,149,.16)'; g.fillRect(24, y - 54, wa - 48, 72); }
+    g.font = '700 46px ' + MONO; g.fillStyle = nw ? '#14f195' : '#8a7fa3'; fit(g, e.tag, 44, y, 165);
+    g.font = '500 44px ' + MONO; g.fillStyle = nw ? '#ffffff' : '#c7bfd8'; fit(g, e.log, 218, y, 360);
+  });
+  /* balance */
+  const bal = balance(t), cx = (wa + wb) / 2;
+  g.textAlign = 'center'; g.fillStyle = '#b8add0'; g.font = '700 42px ' + SANS; g.fillText('BALANCE', cx, 76);
+  g.font = '700 196px ' + SANS; g.fillStyle = '#ffffff'; const s = bal.toFixed(3); g.fillText(s, cx - 110, 260);
+  const tw = g.measureText(s).width; g.textAlign = 'left'; g.font = '700 86px ' + SANS; g.fillStyle = solGrad(g, cx, 200, cx + 400, 260); g.fillText('SOL', cx - 110 + tw / 2 + 28, 260);
+  g.textAlign = 'center'; g.font = '500 54px ' + MONO; g.fillStyle = '#14f195'; g.fillText('+' + (bal - 12.4).toFixed(3) + ' SOL this session', cx, 346);
+  /* chart */
+  const x0 = wa + 70, x1 = wb - 70, y0 = 800, y1 = 410, vmin = 12.1, vmax = 15.9;
+  const X = u => mix(x0, x1, u), Y = v => mix(y0, y1, (v - vmin) / (vmax - vmin));
+  const u = clamp((t - T_ON) / (T_FOLD - T_ON)), n = Math.floor(u * 300);
+  g.beginPath(); let lastx = x0, lasty = y0;
+  for (let i = 0; i <= n; i++) {
+    const uu = i / 300, tt = T_ON + uu * (T_FOLD - T_ON);
+    const v = balance(tt) + (Math.sin(uu * 58) * 0.05 + Math.sin(uu * 133 + 1) * 0.03) * (1 - inq(uu));
+    lastx = X(uu); lasty = Y(v); i ? g.lineTo(lastx, lasty) : g.moveTo(lastx, lasty);
+  }
+  g.save(); g.lineWidth = 9; g.lineJoin = 'round'; g.strokeStyle = solGrad(g, x0, 0, x1, 0); g.stroke();
+  g.lineTo(lastx, y0); g.lineTo(x0, y0); g.closePath(); const af = g.createLinearGradient(0, y1, 0, y0); af.addColorStop(0, 'rgba(20,241,149,.32)'); af.addColorStop(1, 'rgba(153,69,255,0)'); g.fillStyle = af; g.fill(); g.restore();
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(lastx, lasty, 14, 0, TAU); g.fill();
+  /* controls map */
+  g.textAlign = 'left'; g.fillStyle = '#b8add0'; g.font = '700 42px ' + SANS; g.fillText('HANDS', wb + 44, 76);
+  const count = EV.filter(e => e.log && e.t <= t).length;
+  g.font = '700 118px ' + SANS; g.fillStyle = '#ffffff'; g.fillText('0', wb + 44, 200);
+  g.font = '500 44px ' + MONO; g.fillStyle = '#c7bfd8'; g.fillText('human input', wb + 136, 196);
+  const names = [['BUY', 'BUY'], ['SELL', 'SELL'], ['STAKE', 'STAKE'], ['CLAIM', 'CLAIM'], ['L', 'STICK'], ['R2', 'R2'], ['DPAD', 'PAD']];
+  names.forEach(([b, lab], i) => {
+    const cw = 170, cx2 = wb + 44 + (i % 3) * (cw + 12), cy = 260 + Math.floor(i / 3) * 100, on = press(b, t, 0.14);
+    g.fillStyle = `rgba(20,241,149,${0.08 + on * 0.85})`; g.beginPath(); g.roundRect(cx2, cy, cw, 86, 12); g.fill();
+    g.fillStyle = on > 0.35 ? '#07130e' : '#e8e2f5'; g.font = '700 40px ' + SANS; g.textAlign = 'center'; g.fillText(lab, cx2 + cw / 2, cy + 58); g.textAlign = 'left';
+  });
+  g.fillStyle = '#b8add0'; g.font = '700 42px ' + SANS; g.fillText('AGENT PRESSES', wb + 44, 632);
+  g.fillStyle = '#ffffff'; g.font = '700 118px ' + SANS; g.fillText(String(1204 + count), wb + 44, 750);
+  g.fillStyle = '#14f195'; g.beginPath(); g.arc(wb + 56, 810, 13, 0, TAU); g.fill();
+  g.font = '500 44px ' + MONO; g.fillText('RUNNING', wb + 84, 826);
+  sTex.needsUpdate = true;
+}
+
+/* overlay */
+const ui = document.getElementById('ui'); ui.width = W * devicePixelRatio; ui.height = H * devicePixelRatio;
+const c2 = ui.getContext('2d'); c2.scale(devicePixelRatio, devicePixelRatio);
+const proj = (v) => { const p = v.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; };
+function win(t, a, b, f = 0.3) { return ease((t - a) / f) * (1 - ease((t - b + f) / f)); }
+function callout(t, a, b, anchor, lx, ly, side, head, sub) {
+  const al = win(t, a, b); if (al <= 0) return;
+  const [ax, ay] = proj(anchor); const g = c2; g.save(); g.globalAlpha = al;
+  c2.font = '700 36px ' + SANS; const lw = Math.max(c2.measureText(head).width, 0);
+  const ex_ = ax > lx + lw ? lx + lw + 16 : lx - 16, grow = out((t - a) / 0.35), mx = mix(ax, ex_, grow), my = mix(ay, ly - 14, grow);
+  g.strokeStyle = '#2a1d4d'; g.lineWidth = 2; g.beginPath(); g.moveTo(ax, ay); g.lineTo(mx, my); g.stroke();
+  g.fillStyle = '#7a3df0'; g.beginPath(); g.arc(ax, ay, 7, 0, TAU); g.fill();
+  g.textAlign = side > 0 ? 'left' : 'right'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#1c1433'; g.font = '700 36px ' + SANS; g.fillText(head, lx, ly);
+  g.fillStyle = '#4e4368'; g.font = '500 26px ' + SANS; g.fillText(sub, lx, ly + 36);
+  g.restore();
+}
+function head(t, a, b, s, color, y = 136, size = 72) {
+  const al = (a === 0 ? 1 : ease((t - a) / 0.3)) * (1 - ease((t - b + 0.3) / 0.3)); if (al <= 0) return;
+  c2.save(); c2.globalAlpha = al; c2.textAlign = 'center'; c2.textBaseline = 'alphabetic'; c2.fillStyle = color; c2.font = '600 ' + size + 'px ' + SANS; c2.fillText(s, W / 2, y + (1 - al) * 10); c2.restore();
+}
+function drawUI(t, dark) {
+  c2.clearRect(0, 0, W, H);
+  const ink = '#1c1433', wht = '#f6f2ff';
+  head(t, 0, 2.4, 'Nobody is holding this controller.', ink);
+  head(t, 2.4, 3.9, 'So I opened it.', ink);
+  const wp = (g, x, y, z) => g.localToWorld(V(x, y, z));
+  callout(t, 4.8, 7.0, wp(L.front, -2.4, 0.9, 0.4), 90, 215, 1, 'Smoked shell', 'nothing to hide');
+  callout(t, 5.1, 7.0, wp(L.btn, P.Ab[0], P.Ab[1] - 0.42, 0.5), 90, 900, 1, 'Buy, Sell, Stake, Claim', 'real buttons, no fingers');
+  callout(t, 5.4, 7.0, wp(L.mod, P.Ls[0], P.Ls[1] + 0.3, 0.1), 860, 96, 1, 'Sticks and triggers', 'route and size');
+  callout(t, 5.7, 7.0, wp(L.bat, 1.3, 0.2, -0.02), 1380, 930, 1, 'Battery', 'runs while you sleep');
+  { const al = win(t, 7.5, 8.75); if (al > 0) { c2.save(); c2.globalAlpha = al; c2.fillStyle = 'rgba(14,10,28,.86)'; c2.beginPath(); c2.roundRect(70, 800, 900, 190, 22); c2.fill(); c2.textBaseline = 'alphabetic'; c2.textAlign = 'left'; c2.fillStyle = wht; c2.font = '700 70px ' + SANS; c2.fillText('Agent core', 112, 880); c2.fillStyle = '#c9bfe0'; c2.font = '500 38px ' + SANS; c2.fillText('reads the chain, decides, presses the buttons', 112, 946); c2.restore(); } }
+  /* running captions under the scene */
+  const lower = (a, b, s) => { const al = win(t, a, b); if (al <= 0) return; c2.save(); c2.globalAlpha = al; c2.textAlign = 'left'; c2.textBaseline = 'alphabetic'; c2.fillStyle = wht; c2.font = '600 44px ' + SANS; s.split('\n').forEach((ln, i) => c2.fillText(ln, 70, 500 + i * 58)); c2.restore(); };
+  lower(10.5, 12.0, 'Then it\nunfolds.');
+  lower(12.3, 15.3, 'The agent\npresses.');
+  lower(15.6, 19.0, 'I just watch\nthe SOL.');
+  const fd = win(t, 12.0, 19.3, 0.3);
+  if (fd > 0) { c2.save(); c2.globalAlpha = fd * 0.8; c2.fillStyle = wht; c2.font = '500 22px ' + SANS; c2.textAlign = 'right'; c2.fillText('Concept render. Simulated balance.', W - 40, H - 34); c2.restore(); }
+  const e = ease((t - 20.7) / 0.5);
+  if (e > 0) {
+    c2.save(); c2.globalAlpha = e; c2.textAlign = 'center'; c2.textBaseline = 'alphabetic'; c2.fillStyle = ink;
+    c2.font = '700 84px ' + SANS; c2.fillText('AUTOPLAY', W / 2, 130 + (1 - e) * 12);
+    c2.fillStyle = '#4e4368'; c2.font = '500 40px ' + SANS; c2.fillText('The controller that plays itself.', W / 2, 188 + (1 - e) * 12);
+    c2.font = '500 22px ' + SANS; c2.textAlign = 'right'; c2.fillText('Concept render. Simulated balance.', W - 40, H - 34);
+    c2.restore();
+  }
+}
+
+function seek(tIn) {
+  const t = clamp(tIn, 0, DUR - 1e-3);
+  /* lights down when the terminal opens, up again for the end */
+  const dark = ease((t - T_POP) / 1.0) * (1 - ease((t - T_FOLD - 0.3) / 1.0));
+  bgU.uDark.value = dark;
+  floorM.opacity = 1 - dark;
+  floor.visible = dark < 0.98;
+  key.intensity = mix(1.7, 0.9, dark); scene.environmentIntensity = mix(0.95, 0.38, dark);
+  M.smoke.opacity = mix(0.6, 0.46, dark);
+
+  /* gentle hover */
+  rig.position.y = Math.sin(t * 1.05) * 0.05;
+  rig.rotation.z = Math.sin(t * 0.8 + 1) * 0.012;
+
+  for (const k of Object.keys(DIST)) { const f = expl(k, t), d = DIST[k]; L[k].position.set(d[0] * f, d[1] * f, d[2] * f); }
+  GEARS.forEach((g, i) => { g.rotation.z = t * (i % 2 ? -1.1 : 1.1) * (1 + expl('mod', t) * 1.6); });
+
+  /* core and board */
+  const wake = ease((t - 2.4) / 1.0);
+  coreL.intensity = mix(0, 26, wake) * (1 - 0.4 * dark) * (0.82 + 0.18 * Math.sin(t * 10.47));
+  coreL.position.set(0, 0.3 + rig.position.y, 1.0);
+  M.board.emissiveIntensity = mix(0.75, 1.5, wake);
+  screenL.intensity = 24 * ease((t - T_ON + 0.8) / 0.8) * (1 - ease((t - T_FOLD) / 0.5));
+
+  /* controls */
+  for (const n of ['BUY', 'SELL', 'STAKE', 'CLAIM', 'DPAD']) {
+    const c = CTRL[n], p = press(n, t), a = lastAge(n, t);
+    c.g.position.z = c.z0 - 0.09 * p;
+    c.m.emissiveIntensity = (n === 'DPAD' ? 0.15 : 0.4) + 3.2 * p;
+    c.ring.scale.setScalar(1 + a * 2.6); c.ring.material.opacity = Math.max(0, 1 - a / 0.3);
+  }
+  const lp = press('L', t, 0.35), rp = press('CLAIM', t, 0.12);
+  const on = (t < 2.6 || (t > T_POP && t < 20.0)) ? 1 : 0.2;
+  STICK.L.g.rotation.x = (Math.sin(t * 2.3) * 0.12 + lp * Math.sin(t * 15) * 0.32) * on;
+  STICK.L.g.rotation.y = (Math.cos(t * 1.7) * 0.14 + lp * Math.cos(t * 13) * 0.32) * on;
+  STICK.R.g.rotation.x = Math.cos(t * 2.1 + 1) * 0.11 * on - rp * 0.3;
+  STICK.R.g.rotation.y = Math.sin(t * 1.9) * 0.13 * on;
+  const la = lastAge('L', t); STICK.L.ring.scale.setScalar(1 + la * 2.2); STICK.L.ring.material.opacity = Math.max(0, 1 - la / 0.35);
+  const ca = lastAge('CLAIM', t); STICK.R.ring.scale.setScalar(1 + ca * 2.6); STICK.R.ring.material.opacity = Math.max(0, 1 - ca / 0.4);
+  const r2 = press('R2', t, 0.15); SH[1].t.position.z = -0.42 - r2 * 0.14; SH[1].t.rotation.x = r2 * 0.28;
+
+  /* terminal: rises behind the body, then the wings open */
+  const rise = back((t - T_POP) / 0.75) * (1 - inq((t - (T_END - 0.6)) / 0.6));
+  const wing = ease((t - T_WING) / 0.7) * (1 - ease((t - T_FOLD) / 0.6));
+  const vis = t > T_POP - 0.01 && t < T_END + 0.02;
+  L.scr.visible = vis;
+  const scl = mix(0.34, 1, clamp(rise, 0, 1.15));
+  SCR.position.set(0, mix(0.42, 3.42, rise), -0.5);
+  SCR.scale.setScalar(scl);
+  wingL.position.z = wingR.position.z = mix(-0.2, -0.03, wing);
+  wingL.rotation.y = mix(-Math.PI * 0.985, 0.17, wing);
+  wingR.rotation.y = mix(Math.PI * 0.985, -0.17, wing);
+  ARMS.forEach(a => { const top = SCR.position.y - 1.5 * scl, bot = 0.6; const len = Math.max(0.02, top - bot); a.scale.y = len; a.position.y = bot + len / 2; a.position.z = -0.5; a.visible = vis && len > 0.05; });
+  if (vis) drawScreen(t);
+
+  /* coins and sparks */
+  const rs = V(P.Rs[0], P.Rs[1] + rig.position.y, 1.05);
+  const dest = V(0, 3.9 + rig.position.y, 0.35);
+  CLAIMS.forEach((e, i) => {
+    const m = COINS[i], u = (t - e.t) / 0.55;
+    m.visible = u >= 0 && u < 1;
+    if (!m.visible) return;
+    const f = ease(u), arcZ = Math.sin(u * Math.PI) * 1.8;
+    m.position.set(mix(rs.x, dest.x, f) + Math.sin(i * 2.4) * Math.sin(u * Math.PI) * 1.1, mix(rs.y, dest.y, f), mix(rs.z, dest.z, f) + arcZ);
+    m.rotation.set(Math.PI / 2 + Math.sin(u * TAU) * 0.55, 0, Math.sin(u * 3 + i) * 0.5);
+    m.scale.setScalar(0.5 + Math.sin(Math.min(1, u * 1.6) * Math.PI / 2) * 0.75 * (1 - inq((u - 0.75) * 4)));
+  });
+  let np = 0;
+  for (const [ei, e] of CLAIMS.entries()) {
+    const a = t - e.t; if (a < 0 || a > 0.7) continue;
+    for (let i = 0; i < 44 && np < NP; i++) {
+      const th = rnd(i + ei * 13) * TAU, sp = 1.1 + rnd(i * 3 + ei) * 2.6, z = rnd(i * 5 + ei) * 1.4;
+      pPos[np * 3] = rs.x + Math.cos(th) * (0.46 + sp * out(a / 0.7));
+      pPos[np * 3 + 1] = rs.y + Math.sin(th) * (0.46 + sp * out(a / 0.7)) - a * a * 1.2;
+      pPos[np * 3 + 2] = rs.z + z * out(a / 0.7);
+      const fade = Math.pow(1 - a / 0.7, 1.4), mintt = rnd(i + 3) > 0.5;
+      pCol[np * 3] = (mintt ? 0.08 : 0.6) * fade; pCol[np * 3 + 1] = (mintt ? 0.95 : 0.27) * fade; pCol[np * 3 + 2] = (mintt ? 0.58 : 1) * fade; np++;
+    }
+  }
+  pg.setDrawRange(0, np); pg.attributes.position.needsUpdate = true; pg.attributes.color.needsUpdate = true;
+
+  camAt(t);
+  renderer.render(scene, cam);
+  scene.updateMatrixWorld(true);
+  drawUI(t, dark);
+}
+
+window.__R = { seek: tt => seek(tt), DUR };
+window.__L = L;
+seek(0);
+document.documentElement.dataset.ready = '1';
+</script>
+<style>
+html,body{height:100%;background:#0b0916}
+#stage{position:absolute;left:0;top:0;transform-origin:0 0}
+#bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;font:500 13px "Space Grotesk",system-ui,sans-serif;color:#f3effc;background:rgba(14,10,28,.72);backdrop-filter:blur(8px);padding:7px 8px;border-radius:12px;white-space:nowrap;max-width:calc(100vw - 16px)}
+#bar button,#bar a{all:unset;cursor:pointer;padding:6px 11px;border-radius:8px;background:rgba(255,255,255,.1);color:#f3effc}
+#bar button:hover,#bar a:hover{background:rgba(255,255,255,.2)}
+#bar button:focus-visible,#bar a:focus-visible{outline:2px solid #14f195}
+#bar span{opacity:.72;padding:0 6px}
+@media(max-width:560px){#bar span{display:none}}
+</style>
+<div id="bar"><button id="snd" aria-pressed="false">Sound off</button><button id="rst">Restart</button><span>Concept render. No trading logic.</span><a href="https://github.com/kaivornxbt/autoplay-controller">GitHub</a></div>
+<script>
+(function () {
+  const DUR = 22.8, stage = document.getElementById('stage'), a = new Audio('media/autoplay-audio.m4a');
+  a.loop = true; a.preload = 'auto';
+  let t0 = null, sound = false;
+  function fit() { const k = Math.min(innerWidth / 1920, innerHeight / 1080); stage.style.transform = 'translate(' + (innerWidth - 1920 * k) / 2 + 'px,' + (innerHeight - 1080 * k) / 2 + 'px) scale(' + k + ')'; }
+  addEventListener('resize', fit); fit();
+  const now = () => ((performance.now() - t0) / 1000) % DUR;
+  function loop() {
+    if (document.documentElement.dataset.ready === '1') {
+      if (t0 === null) t0 = performance.now();
+      const t = now(); window.__R.seek(t);
+      if (sound && a.readyState >= 2 && Math.abs(a.currentTime - t) > 0.18) a.currentTime = t;
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  const s = document.getElementById('snd');
+  s.onclick = function () { sound = !sound; s.textContent = sound ? 'Sound on' : 'Sound off'; s.setAttribute('aria-pressed', sound); if (sound) { if (t0 !== null) a.currentTime = now(); a.play(); } else a.pause(); };
+  document.getElementById('rst').onclick = function () { t0 = performance.now(); if (sound) a.currentTime = 0; };
+})();
+</script>
+</body></html>
